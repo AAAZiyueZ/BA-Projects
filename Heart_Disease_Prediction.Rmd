@@ -1,0 +1,893 @@
+---
+title: "BA810 Group Assignment"
+author: 
+  - Group 5
+  - Michael Peng, Subhiksha Sivasubramanian, Zheming Xu, Ziyue Zhou, Qianru Ai
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+# Problem Statement
+
+􏰨 Nowadays cardiovascular disease accounts for most of the deaths. Nevertheless, heart disease is possible to be prevented with the right treatment or lifestyle, if we know what factors are related to its onset.
+
+􏰨 This dataset includes multiple features such as age and cholesterol that allow us to find out what factors significantly contribute to cardiovascular disease.
+
+􏰨 We are to build multiple prediction model with machine learning algorithm to predict the risk of having a heart disease based on dependent variables. Also, comprehensive examinations of all models will be performed to find out the best model.
+
+􏰨 Using our model, patients can assess their risk of heart disease and make life adjustments. At the same time, insurance and pharmaceutical companies can use the model to explore their customers' risk of developing the disease in order to improve their profitability.
+
+# Data
+
+## About data
+
+Data Source: <https://www.kaggle.com/fedesoriano/heart-failure-prediction>
+
+```{r}
+library(data.table)
+dd <- fread("D:/Boston University/BA810 ML for BA/Heart_data.csv")
+str(dd)
+```
+
+The original data contains 1068 rows and 12 columns. The following are details about some of the variables.
+
+Target variable:
+
+**HeartDisease**: integer. Dummy variable to indicate if the patient has heart disease or not.
+
+Predictors:
+
+**ChestPainType**: indicates the type of chest pain. TA: Typical Angina, ATA: Atypical Angina, NAP: Non-Anginal Pain, ASY: Asymptomatic.
+
+**RestingBP**: resting blood pressure [mm Hg].
+
+**Cholesterol**: serum cholesterol [mm/dl].
+
+**FastingBS**: fasting blood sugar. 1: FastingBS \> 120 mg/dl, 0: otherwise.
+
+**ResstingECG**: indicates resting electrocardiogram results.
+
+Normal: Normal
+
+ST: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of \> 0.05 mV)
+
+LVH: showing probable or definite left ventricular hypertrophy by Estes' criteria.
+
+**MaxHR**: maximum heart rate achieved.
+
+**ExerciseAngina**: exercise-induced angina. Y: Yes, N: No.
+
+**Oldpeak**: the ratio of ST slope of the peak, exercise relative to rest(oldpeak).
+
+**ST_Slope**: the slope shape of the peak exercise ST segment, a part of ECG
+
+```{r}
+# Package preperation
+library(ggplot2)
+library(gridExtra)
+library(skimr)
+library(glmnet)
+library(corrplot)
+library(tree)
+library(randomForest)
+library(Matrix)
+library(rpart.plot)
+library(ROCR)
+library(tidyverse)
+library(caret)
+library(modelr)
+library(ISLR2)
+library(ggraph)
+```
+
+## Data Description
+
+### 1. Distribution of continuous variables
+
+```{r}
+con_p1 <- ggplot(dd, aes(Age)) + geom_histogram(binwidth=5,colour="black",fill='pink')
+con_p2 <- ggplot(dd, aes(RestingBP)) + geom_histogram(binwidth=10,colour="black", fill='lightblue')
+con_p3 <- ggplot(dd, aes(Cholesterol)) + geom_histogram(binwidth=30,colour="black", fill='lightgreen')
+con_p4 <- ggplot(dd, aes(MaxHR)) + geom_histogram(binwidth=10,colour="black", fill='orange')
+grid.arrange(grobs = list(con_p1,con_p2,con_p3,con_p4), ncol=2)
+```
+
+We could see that the distributions of Age and MaxHR are right skewed, while distributions of RestingBP and Cholesterol are left skewed. Meanwhile, Cholesterol has many 0 values, which need to be fixed later, as it is an impossible value.
+
+### 2. Relationship between heart disease & numeric variables
+
+```{r}
+rel_1 <- ggplot(dd, aes(HeartDisease, MaxHR, group=HeartDisease)) + geom_violin()
+rel_2 <- ggplot(dd, aes(HeartDisease, Age, group=HeartDisease)) + geom_violin()
+rel_3 <- ggplot(dd, aes(HeartDisease, RestingBP, group=HeartDisease)) + geom_violin()
+rel_4 <- ggplot(dd, aes(HeartDisease, Cholesterol, group=HeartDisease)) + geom_violin()
+grid.arrange(grobs = list(rel_1,rel_2,rel_3,rel_4), nrow=2)
+```
+
+The distribution of continuous variables was significantly different for all diseased and non-diseased populations. And obviously, 0 value also exists in RestingBP. We also need to fix it.
+
+We further examined the distribution of age, as this is the variable we can most easily understand.
+
+```{r}
+ggplot(dd,aes(Age,fill=factor(HeartDisease)))+
+  labs(x = "AGE", y = "count",title='Age distribution ')+
+  geom_bar(position = "dodge")
+```
+
+We can see that after about 55, the number of people who have heart disease is almost always greater than the number of people who do not have the disease.
+
+### 3. Relationship between heart disease & categorical variables
+
+```{r}
+rel_5 <- ggplot(dd, aes(HeartDisease, ChestPainType, colour=ChestPainType)) + geom_jitter()
+rel_6 <- ggplot(dd, aes(HeartDisease, FastingBS, colour=FastingBS)) + geom_jitter()
+rel_7 <- ggplot(dd, aes(HeartDisease, Sex, colour=Sex)) + geom_jitter()
+rel_8 <- ggplot(dd, aes(HeartDisease, RestingECG, colour=RestingECG)) + geom_jitter()
+rel_9 <- ggplot(dd, aes(HeartDisease, ExerciseAngina, colour=ExerciseAngina)) + geom_jitter()
+rel_10 <- ggplot(dd, aes(HeartDisease, Oldpeak, colour=Oldpeak)) + geom_jitter()
+rel_11 <- ggplot(dd, aes(HeartDisease, ST_Slope, colour=ST_Slope)) + geom_jitter()
+grid.arrange(grobs = list(rel_5,rel_6,rel_7), nrow=2)
+```
+
+```{r}
+grid.arrange(grobs = list(rel_8,rel_9,rel_10,rel_11), nrow=2)
+```
+
+From these plots, we find that ChestPainType, FatingBS, Sex, Oldpeak and ST_Slope might be more significant predictors.
+
+### 4. Relationship between predictors
+```{r}
+ggplot(dd) +
+  geom_density(aes(x = Age,
+                   fill = ST_Slope)) +
+  labs(x = 'Age') +
+  ggtitle("Age vs St slope ") +
+  theme_bw() +
+  theme(axis.text.x = element_text(face = 'bold', size = 10),
+        axis.text.y = element_text(face = 'bold', size = 10))
+```
+
+We found that the normal shape of the ST slope should be upward. From this graph, we can find that after about 54-year-old, the number of people with a flat ST slope is increasing, and then around 69-year-age, the number of people with a downward ST slope is increasing. It can be assumed that people's cardiopulmonary function becomes worse as they get older.
+
+```{r}
+ggplot(dd) +
+  geom_boxplot(aes(x = Sex, y = RestingBP,
+                   fill = MaxHR)) +
+  labs(x = 'Sex') +
+  ggtitle("Sex ~ RestingBP and MaxHR ") +
+  theme_bw() +
+  theme(axis.text.x = element_text(face = 'bold', size = 10),
+        axis.text.y = element_text(face = 'bold', size = 10))
+```
+
+From the plot, the mean values of RestingBP of male and female are nearly the same. But the 3rd quartile of female is larger than that of male. It can be assumed that the data distribution is wider for women, but more women have smaller values.
+
+```{r}
+ggplot(dd,aes(Age,RestingBP))+geom_point()+geom_smooth(method=lm)+ggtitle("Age-RestingBP")
+```
+As age going up, RestingBP slightly goes up too.
+
+## Data Processing
+**Create Dummy Variables**
+```{r}
+# create dummy variables for ChestPainType
+unique(dd[,"ChestPainType"])
+dd[,"ChestPain_ATA"] <- dd[,"ChestPainType"] == "ATA"
+dd[,"ChestPain_NAP"] <- dd[,"ChestPainType"] == "NAP"
+dd[,"ChestPain_ASY"] <- dd[,"ChestPainType"] == "ASY"
+dd1 <- dd[,-3]
+
+# create dummy variables for sex
+dd1[,'Is_Female'] <- dd1[,'Sex'] == "F"
+dd2 <- dd1[,-2]
+
+# create dummy variables for restingECG
+unique(dd2[,"RestingECG"])
+dd2[,"RestingECG_Normal"] <- dd2[,"RestingECG"] == "Normal"
+dd2[,"RestingECG_ST"] <- dd2[,"RestingECG"] == "ST"
+dd3 <- dd2[,-5]
+
+# create dummy variables for ST Slop
+unique(dd3[,"ST_Slope"])
+dd3[,"ST_Slope_Up"] <- dd3[,"ST_Slope"] == "Up"
+dd3[,"ST_Slope_Flat"] <- dd3[,"ST_Slope"] == "Flat"
+dd4 <- dd3[,-8]
+
+# create dummy variables for Exercise Angina
+dd4[,"ExerciseAngina"] <- dd4[,"ExerciseAngina"] == "Y"
+
+str(dd4)
+```
+
+**Processing Missing Value & Impossible value**
+
+```{r}
+sum(is.na(dd4))
+```
+
+There is no missing value in this dataset, but we found there are many zeroes in Cholesterol, which is impossible. We decided to fill 0 with mean.
+
+```{r}
+choleterol_value <- dd4$Cholesterol[dd4$Cholesterol  != 0 ]
+choles_mean <- mean(choleterol_value)
+
+dd4$Cholesterol[dd4$Cholesterol == 0] = choles_mean
+
+# New distribution of Cholesterol
+ggplot(dd4, aes(Cholesterol)) + geom_histogram(binwidth=30)
+```
+
+```{r}
+sum(dd4$RestingBP == 0)
+```
+
+There is one 0 value in RestingBP. We also fill it with the mean value.
+
+```{r}
+RBP_mean <- mean(dd4$RestingBP[dd4$RestingBP  != 0 ])
+
+dd4$RestingBP[dd4$RestingBP == 0] = RBP_mean
+
+# New distribution of RestingBP
+ggplot(dd4, aes(HeartDisease, RestingBP, group=HeartDisease)) + geom_violin()
+```
+
+```{r}
+heart <-dd4
+summary(heart)
+```
+
+# Modeling
+
+**Relationship**
+
+```{r}
+cor_heart <- cor(heart)
+corrplot(cor_heart,method="square",tl.cex = 0.7)
+```
+
+From the correlation matrix, we could see that all the predictors have more or less relationship with heart disease. However, multicollineary may exits between some variables.
+
+```{r}
+# Divide dataset
+smp_size <- floor(0.8 * nrow(heart))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(heart)), size = smp_size)
+
+train <- heart[train_ind, ]
+test <- heart[-train_ind, ]
+x_train <- as.matrix(train[,-"HeartDisease"])
+y_train <- as.matrix(train[,"HeartDisease"])
+x_test <- as.matrix(test[,-"HeartDisease"])
+y_test <- as.matrix(test[,"HeartDisease"])
+```
+
+Then, we will try linear regression, ridge regression, lasso regression, decision tree and random forest to build models.
+
+## Linear regression
+
+We tried backward selection and forward selection separately to find the best subset of predictors.
+
+```{r}
+# Create a model without predictor
+model_none <- glm(HeartDisease ~ 1, family = "binomial", data = train)
+# Create a model with all predictor
+model_all <- glm(HeartDisease ~ ., family = "binomial", data = train)
+
+# Stepwise regression backward
+model_backward <- step(object = model_all, direction = "backward", trace = F)
+summary(model_backward)
+```
+
+```{r}
+# Stepwise regression forward
+model_forward <- step(object = model_all, scope = list(lower = model_none, upper = model_all), 
+                      direction = "forward", trace = F)
+summary(model_forward)
+```
+
+Since we have lower Residual deviance in forward model, so we choose forward model for subsequent processing.
+
+```{r}
+# Prediction
+pred_fw0 <-  predict(model_forward, type = "response", newdata = test)
+pred_fw0 <- ifelse(pred_fw0 >= 0.5, 1, 0)
+```
+
+```{r}
+# MSE
+mse_fw0 <- colMeans((y_train - pred_fw0)^2)
+# MSE
+rmse_fw0 <- sqrt(mse_fw0)
+```
+
+**Validation**
+```{r}
+set.seed(123)
+# Set up repeated k-fold cross-validation
+train.control <- trainControl(method = "cv", number = 10)
+# Train the model
+step.model <- train(HeartDisease ~., data = train,
+                    method = "leapForward", 
+                    tuneGrid = data.frame(nvmax = 1:15),
+                    trControl = train.control
+                    )
+step.model$results
+```
+
+```{r}
+step.model$bestTune
+```
+
+The model with 11 predictors performs the best.
+
+```{r}
+coef(step.model$finalModel, 11)
+```
+
+Thus, the best predictors are: Age, Cholesterol, FastingBS, MaxHR, ExerciseAngina, Oldpeak, ChestPain_ATA, ChestPain_ASY, Is_Female, ST_Slope_Up, ST_Slope_Flat.
+
+The best model is:
+
+```{r}
+fw_best <- glm(HeartDisease ~ Age + Cholesterol + FastingBS +  MaxHR + ExerciseAngina + Oldpeak + ChestPain_ATA + ChestPain_ASY + Is_Female + ST_Slope_Up + ST_Slope_Flat, family = "binomial",data=train)
+```
+
+```{r}
+# Calculate MSE and RMSE
+pred_fw <- predict(fw_best, type = "response", newdata = test)
+pred_fw <- ifelse(pred_fw > 0.5, 1, 0)
+# MSE
+mse_fw <- mean((y_test - pred_fw)^2)
+# RMSE
+rmse_fw <- sqrt(mse_fw)
+```
+
+```{r}
+mse_fw <= mse_fw0
+```
+
+```{r}
+rmse_fw <= mse_fw0
+```
+
+Thus, the forward selection model after validation is better. We use this model to predict and calculate its accuracy rate.
+
+```{r}
+table_mat_fw <- table(test$HeartDisease, pred_fw)
+table_mat_fw
+```
+
+```{r}
+accuracy_fw <- sum(diag(table_mat_fw)) / sum(table_mat_fw)
+print(accuracy_fw)
+```
+
+## Ridge regression
+
+```{r}
+Ridge_model <- glmnet(x_train, y_train, alpha = 0, nlambda = 100)
+#Prediction
+y_train_hat_ridge <-data.table(predict(Ridge_model, x_train))
+y_test_hat_ridge <- data.table(predict(Ridge_model, x_test))
+```
+
+```{r}
+# Compute MSEs
+mse_train_ridge <- colMeans((y_train - y_train_hat_ridge)^2)
+mse_test_ridge <- colMeans((y_test - y_test_hat_ridge)^2)
+lambda_min_mse_train_ridge <- mse_train_ridge[which.min(mse_train_ridge)]
+lambda_min_mse_test_ridge <- mse_test_ridge[which.min(mse_test_ridge)]
+
+dd_mse_train_ridge <- data.table(
+  lambda = Ridge_model$lambda,
+  mse = mse_train_ridge,
+  dataset = "Train"
+)
+dd_mse_ridge <- rbind(dd_mse_train_ridge, data.table(
+  lambda = Ridge_model$lambda,
+  mse = mse_test_ridge,
+  dataset = "Test"
+))
+
+#plot
+min <- dd_mse_ridge[mse == lambda_min_mse_test_ridge | mse == lambda_min_mse_train_ridge, ]
+
+ggplot (dd_mse_ridge,aes(lambda,mse,col = dataset)) +
+  geom_line() + geom_point(aes(lambda, mse, col = dataset), min) +
+  scale_x_reverse() 
+```
+
+The plot shows that when lambda approach to 0, the MSEs of both test and train data set become smaller. We conclude that the predictors are significant that no penalty should be posed.
+
+```{r}
+# coefficients
+plot(Ridge_model,xvar="lambda",lable=T)
+```
+
+```{r}
+# Validation
+cv_model_ridge <- cv.glmnet(x_train,y_train, alpha = 0)
+cv_best_lambda_ridge <- cv_model_ridge$lambda.min
+cv_best_lambda_ridge
+```
+
+```{r}
+best_cv_model_ridge <- glmnet(x_train, y_train, alpha = 0, lambda = cv_best_lambda_ridge)
+cv_pred_ridge <- predict(best_cv_model_ridge, s = cv_best_lambda_ridge, newx = x_test)
+cv_pred_ridge <- ifelse(cv_pred_ridge > 0.5, 1, 0)
+cv_mse_test_ridge <- colMeans((y_test - cv_pred_ridge)^2)
+```
+
+```{r}
+log(cv_best_lambda_ridge)
+cvfit_ridge <- cv.glmnet(x_train,y_train)
+plot(cvfit_ridge)
+```
+
+The plot indicates that, as the log cv lambda gets smaller (cv lambda gets smaller), MSE gets smaller too.
+
+```{r}
+print(paste('MSE test for ridge', lambda_min_mse_test_ridge))
+```
+
+```{r}
+print(paste('MSE test for cross validation', cv_mse_test_ridge))
+```
+
+```{r}
+print(paste('RMSE test for ridge', sqrt(lambda_min_mse_test_ridge)))
+```
+
+```{r}
+print(paste('RMSE test for cross validation',sqrt(cv_mse_test_ridge)))
+```
+
+The MSE and RMSE after cross validation are larger. The original model performs better. So we use the original ridge model to find the optimal lambda.
+
+```{r}
+optimal_lambda_ridge <- min[dataset=="Test", lambda]
+ridge_best <-  glmnet(x_train, y_train, alpha = 0, lambda=optimal_lambda_ridge)
+pred_ridge <- predict(ridge_best, newx=x_test)
+pred_ridge <- ifelse(pred_ridge > 0.5, 1, 0)
+table_mat_ridge <- table(test$HeartDisease, pred_ridge)
+accuracy_ridge <- sum(diag(table_mat_ridge)) / sum(table_mat_ridge)
+print(accuracy_ridge)
+```
+
+## Lasso regression
+
+```{r}
+lasso_model <- glmnet(x_train, y_train, alpha = 1, nlambda = 100)
+# Predict responses
+y_train_hat_lasso <-data.table(predict(lasso_model, x_train))
+y_test_hat_lasso <- data.table(predict(lasso_model, x_test))
+```
+
+```{r}
+# Compute MSEs
+mse_train_lasso <- colMeans((y_train - y_train_hat_lasso)^2)
+mse_test_lasso <- colMeans((y_test - y_test_hat_lasso)^2)
+
+lambda_min_mse_train_lasso <- mse_train_lasso[which.min(mse_train_lasso)]
+lambda_min_mse_test_lasso <- mse_test_lasso[which.min(mse_test_lasso)]
+
+dd_mse_train_lasso <- data.table(
+  lambda = lasso_model$lambda,
+  mse = mse_train_lasso,
+  dataset = "Train"
+)
+dd_mse_lasso <- rbind(dd_mse_train_lasso, data.table(
+  lambda = lasso_model$lambda,
+  mse = mse_test_lasso,
+  dataset = "Test"
+))
+
+#plot
+min_lasso <- dd_mse_lasso[mse == lambda_min_mse_test_lasso | mse == lambda_min_mse_train_lasso, ]
+
+ggplot (dd_mse_lasso,aes(lambda,mse,col = dataset)) +
+  geom_line() + geom_point(aes(lambda, mse, col = dataset), min_lasso) +
+  scale_x_reverse() 
+
+```
+
+```{r}
+# coefficients
+plot(lasso_model,xvar="lambda",lable=T)
+```
+
+```{r}
+# Validation
+cv_model_lasso <- cv.glmnet(x_train,y_train, alpha = 1)
+cv_best_lambda_lasso <- cv_model_lasso$lambda.min
+cv_best_lambda_lasso
+```
+
+```{r}
+best_cv_model_lasso <- glmnet(x_train, y_train, alpha = 1, lambda = cv_best_lambda_lasso)
+cv_pred_lasso <- predict(best_cv_model_lasso, s = cv_best_lambda_lasso, newx = x_test)
+cv_pred_lasso <- ifelse(cv_pred_lasso > 0.5, 1, 0)
+cv_mse_test_lasso <- colMeans((y_test - cv_pred_lasso)^2)
+```
+
+```{r}
+log(cv_best_lambda_lasso)
+cvfit_lasso <- cv.glmnet(x_train,y_train)
+plot(cvfit_lasso)
+```
+
+The plot indicates that, as the log cv lambda gets smaller (cv lambda gets smaller), MSE gets smaller too. 
+
+```{r}
+print(paste('MSE test for lasso', lambda_min_mse_test_lasso))
+```
+
+```{r}
+print(paste('MSE test for cross validation', cv_mse_test_lasso))
+```
+
+```{r}
+print(paste('RMSE test for lasso', sqrt(lambda_min_mse_test_lasso)))
+```
+
+```{r}
+print(paste('RMSE test for cross validation',sqrt(cv_mse_test_lasso)))
+```
+
+The MSE and RMSE after cross validation are larger. The original model performs better. So we use the original lasso model to find the optimal lambda.
+
+```{r}
+optimal_lambda_lasso <- min_lasso[dataset=="Test", lambda]
+optimal_lambda_lasso
+lasso_best <-  glmnet(x_train, y_train, alpha = 1, lambda=min_lasso[dataset=="Test", lambda])
+pred_lasso <- predict(lasso_best, newx=x_test)
+pred_lasso <- ifelse(pred_lasso > 0.5, 1, 0)
+table_mat_lasso <- table(test$HeartDisease, pred_lasso)
+accuracy_lasso <- sum(diag(table_mat_lasso)) / sum(table_mat_lasso)
+print(accuracy_lasso)
+```
+
+## Decision tree
+
+```{r}
+tree_model <- rpart(HeartDisease~., data = train, method = 'class')
+rpart.plot(tree_model, extra = 106)
+```
+
+Complexity parameter used in pruning is called as cp which is used to determine the optimal size of the tree and prevent over fitting.
+For pruning, we tried two ways: post pruning and pre pruning.
+
+**Post pruning**
+```{r}
+#Pruning
+##Post pruning the tree
+Pruned_tree<-prune(tree_model,cp=0.16)
+prp(Pruned_tree,box.col=c("Grey", "Orange")[tree_model$frame$yval],varlen=0,faclen=0, type=1,extra=4,under=TRUE)
+```
+
+```{r}
+# Conducting pruning
+Ecom_Tree_prune<-prune(tree_model,cp=0.0029646)
+#Before pruning
+prp(tree_model,box.col=c("Grey", "Orange")[tree_model$frame$yval],varlen=0,faclen=0, type=1,extra=4,under=TRUE, main="TREE BEFORE PRUNING")
+```
+
+```{r}
+#After Pruning
+prp(Ecom_Tree_prune,box.col=c("Grey", "red")[tree_model$frame$yval],varlen=0,faclen=0, type=1,extra=4,under=TRUE, main="TREE AFTER PRUNING")
+```
+
+Two sample trees would be built to analyze the difference with due to different cp values.
+
+```{r}
+Sample_tree<-rpart(HeartDisease~., method="class", data=train,
+                   control=rpart.control(minsplit=2, cp=0.001))
+object.size(Sample_tree)
+```
+
+```{r}
+Sample_tree_1<-rpart(HeartDisease~., method="class", data=train, 
+                     control=rpart.control(minsplit=2, cp=0.1))
+object.size(Sample_tree_1)
+```
+
+We could see that the tree with smaller cp (Sample tree) is much larger than the one with larger cp (Sample tree 1). This is because model with larger cp stops running earlier.
+
+```{r}
+#CROSS VALIDATION RESULTS
+plotcp(Sample_tree)
+```
+
+```{r}
+#New model with selected cp
+cp <- data.table(Sample_tree[["cptable"]])
+optimal_cp <- mean(cp[xerror == min(xerror),CP])
+Sample_tree_2<-rpart(HeartDisease~., method="class", data=train, 
+                     control=rpart.control(minsplit=2, cp=optimal_cp))
+#Plotting the Tree
+prp(Sample_tree_2,box.col=c("Grey", "Orange")[Sample_tree_2$frame$yval],
+    varlen=0,faclen=0, type=1,extra=4,under=TRUE)
+```
+
+
+```{r}
+#Post pruning the old tree
+Pruned_tree<-prune(Sample_tree,cp=0.23)
+prp(Pruned_tree,box.col=c("Grey", "Orange")[Sample_tree$frame$yval],
+    varlen=0,faclen=0, type=1,extra=4,under=TRUE)
+```
+
+**Pre pruning**
+```{r}
+#choosing cp
+Ecom_Tree<-rpart(HeartDisease~., method="class", 
+                 control=rpart.control(minsplit=30,cp=0.001),data=heart)
+printcp(Ecom_Tree)
+```
+
+```{r}
+plotcp(Ecom_Tree)
+```
+
+```{r}
+cp_econ <- data.table(Sample_tree[["cptable"]])
+optimal_cp_econ <- mean(cp[xerror == min(xerror),CP])
+optimal_cp_econ
+```
+
+```{r}
+#Code to prune
+Ecom_Tree_prune<-prune(Ecom_Tree,optimal_cp_econ)
+#Plot before pruning
+prp(Ecom_Tree,box.col=c("Grey", "Orange")[Ecom_Tree$frame$yval],
+    varlen=0,faclen=0, type=1,extra=4,under=TRUE,main="TREE BEFORE PRUNING")
+```
+
+
+```{r}
+#Plot after pruning
+prp(Ecom_Tree_prune,box.col=c("Grey", "red")[Sample_tree_1$frame$yval],
+    varlen=0,faclen=0, type=1,extra=4,under=TRUE, main="TREE AFTER PRUNING")
+```
+
+```{r}
+# Choose the best tree model
+pred_tree <- predict(tree_model,test, type="class")
+MSE_tree <- mean((y_test - (as.numeric(as.character(pred_tree))))^2)
+
+pred_Ecom <- predict(Ecom_Tree,test, type="class")
+MSE_Ecom <- mean((y_test - (as.numeric(as.character(pred_Ecom))))^2)
+
+predict_Ecom_prune <- predict(Ecom_Tree_prune, test, type="class")
+MSE_Ecom_prune <- mean((y_test - (as.numeric(as.character(predict_Ecom_prune))))^2)
+```
+
+```{r}
+MSE_Ecom < MSE_tree
+```
+```{r}
+MSE_Ecom_prune < MSE_Ecom
+```
+
+```{r}
+c(MSE_Ecom_prune, MSE_Ecom)
+```
+
+With a smaller MSE and lower degree of over fitting, we consider Ecom_model_prune to have a higher MSE but a lower degree of over fitting, such that the sacrifice to MSE is acceptable. Therefore, we consider Ecom_model_prune to be the best model.
+
+```{r}
+# predict
+predict_tree <- predict(Ecom_Tree, test, type="class")
+table_mat <- table(test$HeartDisease, predict_tree)
+table_mat
+```
+
+```{r}
+# Accuracy
+accuracy_tree <- sum(diag(table_mat)) / sum(table_mat)
+print(accuracy_tree)
+```
+
+```{r}
+# MSE
+with(test, table(predict_tree, HeartDisease))
+MSE_tree<-(mean((as.numeric(as.character(predict_tree))-y_test)^2))
+print(MSE_tree)
+```
+
+```{r}
+# RMSE
+RMSE_tree<-sqrt(mean((as.numeric(as.character(predict_tree))-y_test)^2))
+print(RMSE_tree)
+```
+
+## Random forest
+
+We use a bagging random forest.
+
+```{r}
+set.seed(123)
+rf_model <- randomForest(HeartDisease~.,data=train, replace=T,
+                         keep.forest = TRUE, keep.inbag=TRUE)
+plot(rf_model)
+```
+
+```{r}
+# Calculate MSE, RMSE and accuracy for the original model
+pred_rf0 <- predict(rf_model, newdata = x_test)
+pred_rf0 <- ifelse(pred_rf0 > 0.5, 1, 0)
+table_mat_rf0 <- table(test$HeartDisease, pred_rf0)
+table_mat_rf0
+```
+
+```{r}
+## MSE
+with(test, table(pred_rf0, HeartDisease))
+MSE_rf0<-(mean((as.numeric(as.character(pred_rf0))-y_test)^2))
+## RMSE
+RMSE_rf0<-sqrt(MSE_rf0)
+## accuracy rate
+accuracy_rf0 <- sum(diag(table_mat_rf0)) / sum(table_mat_rf0)
+```
+
+```{r}
+# Model improvement
+# select mtry
+set.seed(123)
+mtry <- tuneRF(x_train,y_train, ntreeTry=500,
+               stepFactor=2,improve=0.02,trace=FALSE,plot=TRUE)
+```
+
+```{r}
+set.seed(123)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+# use the mtry that minimizes the oob error
+rf_improve <- randomForest(HeartDisease~.,data=train, mtry=best.m,
+                           replace=T,keep.forest = TRUE, keep.inbag=TRUE)
+print(rf_improve)
+```
+
+```{r}
+plot(rf_improve)
+```
+```{r}
+# Evaluation
+pred_rf <- predict(rf_improve, newdata=x_test)
+pred_rf <- ifelse(pred_rf > 0.5, 1, 0)
+table_mat_rf <- table(test$HeartDisease, pred_rf)
+table_mat_rf
+```
+
+```{r}
+# MSE
+with(test, table(pred_rf, HeartDisease))
+MSE_rf<-(mean((as.numeric(as.character(pred_rf))-y_test)^2))
+# RMSE
+RMSE_rf<-sqrt(MSE_rf)
+# Accuracy
+accuracy_rf <- sum(diag(table_mat_rf)) / sum(table_mat_rf)
+```
+
+```{r}
+# Compare
+MSE_rf <= MSE_rf0
+```
+```{r}
+MSE_rf
+```
+```{r}
+MSE_rf0
+```
+
+It turns out that the results of the original random forest and the improved random forest are identical. 
+
+```{r}
+RMSE_rf == RMSE_rf0
+```
+
+```{r}
+accuracy_rf == accuracy_rf0
+```
+
+We set the improved model as the best fit random forest.
+
+```{r}
+rf_best <- rf_improve
+importance(rf_best)
+```
+
+```{r}
+varImpPlot(rf_best)
+```
+
+From the result, we can conclude that the most important factors to predict heart disease are: Oldpeak, ST_Slope_Up, Cholesterol, MaxHR, ChestPain_ASY, RestingBP, Age and ST_Slope_Flat.
+
+```{r}
+MSE_rf_best <- MSE_rf
+MSE_rf_best
+RMSE_rf_best <- RMSE_rf
+RMSE_rf_best
+accuracy_rf_best <- accuracy_rf
+accuracy_rf_best
+```
+
+
+# Model Comparison
+
+We use MSE, RMSE and accuracy rate to select the best model.
+
+```{r}
+# MSE for different models
+c(mse_fw, lambda_min_mse_test_ridge,lambda_min_mse_test_lasso, MSE_tree, MSE_rf_best)
+```
+
+```{r}
+# RMSE for different models
+c(rmse_fw, sqrt(lambda_min_mse_test_ridge),sqrt(lambda_min_mse_test_lasso), RMSE_tree, RMSE_rf_best)
+```
+
+```{r}
+# Accuracy rate
+c(accuracy_fw, accuracy_ridge, accuracy_lasso, accuracy_tree, accuracy_rf_best)
+```
+
+# Conclusion
+
+## Best model
+
+We could see that ridge regression has the lowest MSE and RMSE, and the decision tree has the highest accuracy rate. Thus, we refer the ridge regression as the best model in fitting, and decision tree as the best model in predicting. But we believe if we have a larger data set, the accuracy rate of ridge regression should increase.
+
+## Limitation
+
+1\. Can not separate causal relationship. Like, ST_slope & ChestPainType might be the result of having heart disease; thus, they might not be used as predictors.
+
+2\. Because the best fit model is ridge regression, which could not perform subset selection, we cannot find out which variables bring greater impact through the best model, but can only get this kind of information through other models.
+
+## Challenge
+
+1\. Validation for each model.Because the validation methods for each model are not quite the same, we spent a lot of time studying how to validate the different models by reading textbook and searching for papers.
+
+2\. We learned decision tree only a short time ago and we are not very familiar with it yet. So we tried four methods of pruning the decision tree to find the best two and spent a lot of time on pruning logic and programming.
+
+3\. Visualization of random forest. We would love to be able to visualize the best fit random forest, just like a tree model. But we have not found a way to draw its roots.
+Hopefully, we can discover a way to visualize the random forest in the future.
+
+4\. Work Integration. Because we assign each person to complete a different model, the variable names have to be checked several times to make sure there is no duplication. Also, there are times when unexpected bugs occur during integrating due to different versions of R or packages.
+
+We found that learning concepts and code from the textbook and actually completing a project are very different things. Hope we will have more opportunities to practice in the future.
+
+# Practical Application
+
+## Find out significant factors
+
+From the forward selection, we found ten important predictors of heart disease: Age, Cholesterol, FastingBS, MaxHR, ExerciseAngina, Oldpeak, ChestPain_ATA, ChestPain_ASY, Is_Female, ST_Slope_Up, ST_Slope_Flat.
+
+From random forest, we found the following indicators have higher importance: Oldpeak, ST_Slope_Up, Cholesterol, MaxHR, ChestPain_ASY, RestingBP, Age and ST_Slope_Flat.
+
+We therefore believe that the following factors have a greater impact on heart disease: age, cholesterol, fasting blood sugar (FastingBS), exercise-induced angina (ExerciseAngina), the ratio of ST slope of the peak, exercise relative to rest (Oldpeak), chest pain type (especially ChestPain_ATA and ChestPain_ASY), gender (Is_Female), ST slope (ST_Slope_Up, ST_Slope_Flat), maximum heart rate achieved (MaxHR).
+
+Remind the coefficients:
+
+```{r}
+coef(step.model$finalModel, 11)
+```
+
+Thus, we have following suggestions.
+
+1.  Men and seniors should pay more attention to heart disease prevention because they are more likely to develop the disease.
+2.  The non-diseased population should undergo regular medical examinations and pay attention to the following indicators: 
+1) Cholesterol, when it is becoming high,
+2) Fasting blood sugar, when it is becoming high,
+3) Old peak, when it is becoming high,
+4) ST slope, when it is flat or down.
+3. For people who have angina when exercising, and who have chest pains from time to time, they need to consider the possibility of heart disease and go to the hospital as soon as possible for investigation.
+4.  For people who already have heart disease, pay attention to there cholesterol, fasting blood sugar and old peak. When these measures have abnormal elevation, go to the hospital as soon as possible.
+
+## Predict using the best model
+For insurance company and other organizations who are concerned about their customer's physical condition, our model is helpful for predicting the possibility for customers of getting heart disease, or check for false information about heart disease in the information submitted by the client. 
+For example, it is possible to predict the probability of a client getting heart disease based on the data in the medical examination report he/she submits. If the probability of getting heart disease is high but the client does not claim so, he/she can be asked to provide more specific information.
